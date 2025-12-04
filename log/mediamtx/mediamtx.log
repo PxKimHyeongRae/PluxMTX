@@ -1,0 +1,16 @@
+2025/12/04 10:07:26 INF MediaMTX v0.0.0
+2025/12/04 10:07:26 INF configuration loaded from /app/mediamtx.yml
+2025/12/04 10:07:26 INF [RTSP] listener opened on :8121 (TCP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2025/12/04 10:07:26 INF [RTMP] listener opened on :1935
+2025/12/04 10:07:26 INF [HLS] listener opened on :8120
+2025/12/04 10:07:26 INF [WebRTC] listener opened on :8117 (HTTP), :8118 (ICE/UDP)
+2025/12/04 10:07:26 INF [SRT] listener opened on :8890 (UDP)
+2025/12/04 10:07:26 INF [API] listener opened on :8119
+2025/12/04 10:10:18 INF shutting down gracefully
+2025/12/04 10:10:18 INF [API] listener is closing
+2025/12/04 10:10:18 INF [SRT] listener is closing
+2025/12/04 10:10:18 INF [WebRTC] listener is closing
+2025/12/04 10:10:18 INF [HLS] listener is closing
+2025/12/04 10:10:18 INF [RTMP] listener is closing
+2025/12/04 10:10:18 INF [RTSP] listener is closing
+2025/12/04 10:10:18 INF waiting for running hooks

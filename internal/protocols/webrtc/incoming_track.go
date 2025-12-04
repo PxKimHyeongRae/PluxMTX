@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"sync"
 	"time"
 
 	"github.com/bluenviron/gortsplib/v5/pkg/rtpreceiver"
@@ -11,6 +12,14 @@ import (
 	"github.com/bluenviron/mediamtx/internal/counterdumper"
 	"github.com/bluenviron/mediamtx/internal/logger"
 )
+
+// Buffer pool for incoming RTCP reading to reduce allocations
+var incomingRtcpBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 1500)
+		return &buf
+	},
+}
 
 const (
 	keyFrameInterval  = 2 * time.Second
@@ -281,10 +290,12 @@ func (t *IncomingTrack) start() {
 	}
 	t.packetsLost.Start()
 
+	// RTCP receiver interval optimized for performance
+	// Changed from 1s to 3s to reduce CPU overhead
 	t.rtpReceiver = &rtpreceiver.Receiver{
 		ClockRate:            int(t.track.Codec().ClockRate),
 		UnrealiableTransport: true,
-		Period:               1 * time.Second,
+		Period:               3 * time.Second,
 		WritePacketRTCP: func(p rtcp.Packet) {
 			t.writeRTCP([]rtcp.Packet{p}) //nolint:errcheck
 		},
@@ -296,8 +307,12 @@ func (t *IncomingTrack) start() {
 
 	// read incoming RTCP packets.
 	// incoming RTCP packets must always be read to make interceptors work.
+	// Using buffer pool to reduce GC pressure
 	go func() {
-		buf := make([]byte, 1500)
+		bufPtr := incomingRtcpBufferPool.Get().(*[]byte)
+		defer incomingRtcpBufferPool.Put(bufPtr)
+		buf := *bufPtr
+
 		for {
 			n, _, err2 := t.receiver.Read(buf)
 			if err2 != nil {
