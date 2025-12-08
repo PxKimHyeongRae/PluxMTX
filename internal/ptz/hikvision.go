@@ -3,6 +3,7 @@ package ptz
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +11,24 @@ import (
 	"strings"
 	"time"
 )
+
+// PTZPreset represents a single PTZ preset
+type PTZPreset struct {
+	Enabled      bool   `xml:"enabled" json:"enabled"`
+	ID           int    `xml:"id" json:"id"`
+	PresetName   string `xml:"presetName" json:"name"`
+	AbsoluteHigh struct {
+		Elevation    int `xml:"elevation" json:"elevation"`
+		Azimuth      int `xml:"azimuth" json:"azimuth"`
+		AbsoluteZoom int `xml:"absoluteZoom" json:"zoom"`
+	} `xml:"AbsoluteHigh" json:"position"`
+}
+
+// PTZPresetList represents the list of PTZ presets from Hikvision camera
+type PTZPresetList struct {
+	XMLName xml.Name    `xml:"PTZPresetList"`
+	Presets []PTZPreset `xml:"PTZPreset" json:"presets"`
+}
 
 // HikvisionPTZ handles PTZ control for Hikvision cameras via ISAPI
 type HikvisionPTZ struct {
@@ -68,10 +87,20 @@ func (h *HikvisionPTZ) GetStatus() (string, error) {
 	return h.sendGetRequest(url)
 }
 
-// GetPresets gets list of available presets
-func (h *HikvisionPTZ) GetPresets() (string, error) {
+// GetPresets gets list of available presets and returns parsed preset list
+func (h *HikvisionPTZ) GetPresets() ([]PTZPreset, error) {
 	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets", h.getHostPort())
-	return h.sendGetRequest(url)
+	xmlData, err := h.sendGetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var presetList PTZPresetList
+	if err := xml.Unmarshal([]byte(xmlData), &presetList); err != nil {
+		return nil, fmt.Errorf("failed to parse XML: %w", err)
+	}
+
+	return presetList.Presets, nil
 }
 
 // GotoPreset moves to a specific preset position
@@ -85,6 +114,48 @@ func (h *HikvisionPTZ) GotoPreset(presetID int) error {
 
 	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets/%d/goto", h.getHostPort(), presetID)
 	return h.sendRequest("PUT", url, xmlData)
+}
+
+// SetPreset saves current PTZ position as a preset
+func (h *HikvisionPTZ) SetPreset(presetID int, presetName string) error {
+	xmlData := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<PTZPreset>
+    <id>%d</id>
+    <presetName>%s</presetName>
+</PTZPreset>`, presetID, presetName)
+
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets/%d", h.getHostPort(), presetID)
+	return h.sendRequest("PUT", url, xmlData)
+}
+
+// DeletePreset deletes a preset by ID
+func (h *HikvisionPTZ) DeletePreset(presetID int) error {
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets/%d", h.getHostPort(), presetID)
+
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.SetBasicAuth(h.Username, h.Password)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		// Try with digest auth
+		return h.sendDigestDeleteRequest(url, resp)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
 
 // sendRequest sends an HTTP request with digest authentication
@@ -210,6 +281,66 @@ func (h *HikvisionPTZ) sendDigestGetRequest(urlStr string, authResp *http.Respon
 	}
 
 	return string(bodyBytes), nil
+}
+
+// sendDigestDeleteRequest sends a DELETE request with digest authentication
+func (h *HikvisionPTZ) sendDigestDeleteRequest(urlStr string, authResp *http.Response) error {
+	// Parse WWW-Authenticate header
+	authHeader := authResp.Header.Get("WWW-Authenticate")
+	if authHeader == "" {
+		return fmt.Errorf("no WWW-Authenticate header")
+	}
+
+	req, err := http.NewRequest("DELETE", urlStr, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create digest request: %w", err)
+	}
+
+	// Parse digest challenge
+	digestParams := parseDigestAuth(authHeader)
+
+	// Calculate digest response
+	uri := req.URL.Path
+	if req.URL.RawQuery != "" {
+		uri += "?" + req.URL.RawQuery
+	}
+
+	ha1 := md5Hash(h.Username + ":" + digestParams["realm"] + ":" + h.Password)
+	ha2 := md5Hash("DELETE:" + uri)
+
+	var response string
+	var authHeaderValue string
+
+	if qop, ok := digestParams["qop"]; ok && qop == "auth" {
+		// With qop
+		cnonce := "0a4f113b"
+		nc := "00000001"
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", qop=%s, nc=%s, cnonce="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, qop, nc, cnonce, response)
+	} else {
+		// Without qop
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, response)
+	}
+
+	req.Header.Set("Authorization", authHeaderValue)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("digest request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("digest request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
 }
 
 // sendDigestRequest sends a request with digest authentication

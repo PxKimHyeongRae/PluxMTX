@@ -252,6 +252,8 @@ func (a *API) Initialize() error {
 		ptzGroup.GET("/:camera/status", a.onPTZStatus)
 		ptzGroup.GET("/:camera/presets", a.onPTZPresets)
 		ptzGroup.POST("/:camera/preset/:presetId", a.onPTZGotoPreset)
+		ptzGroup.PUT("/:camera/preset/:presetId", a.onPTZSetPreset)
+		ptzGroup.DELETE("/:camera/preset/:presetId", a.onPTZDeletePreset)
 	}
 
 	a.httpServer = &httpp.Server{
@@ -1434,6 +1436,125 @@ func (a *API) onPTZGotoPreset(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, PTZResponse{
 		Success: true,
 		Message: fmt.Sprintf("Moving to preset %d", presetID),
+	})
+}
+
+func (a *API) onPTZSetPreset(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+	presetIDStr := ctx.Param("presetId")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid preset ID",
+		})
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid request body: name is required",
+		})
+		return
+	}
+
+	if req.Name == "" {
+		req.Name = fmt.Sprintf("Preset%d", presetID)
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err = ptzController.SetPreset(presetID, req.Name)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to set preset: %v", err),
+		})
+		return
+	}
+
+	// Get the updated preset list to return the created preset
+	presets, err := ptzController.GetPresets()
+	if err != nil {
+		// If we can't get presets, still return success but with message only
+		ctx.JSON(http.StatusOK, PTZResponse{
+			Success: true,
+			Message: fmt.Sprintf("Preset %d saved as '%s'", presetID, req.Name),
+		})
+		return
+	}
+
+	// Find the created preset in the list
+	var createdPreset *ptz.PTZPreset
+	for i := range presets {
+		if presets[i].ID == presetID {
+			createdPreset = &presets[i]
+			break
+		}
+	}
+
+	if createdPreset != nil {
+		ctx.JSON(http.StatusOK, PTZResponse{
+			Success: true,
+			Message: fmt.Sprintf("Preset %d saved as '%s'", presetID, req.Name),
+			Data:    createdPreset,
+		})
+	} else {
+		ctx.JSON(http.StatusOK, PTZResponse{
+			Success: true,
+			Message: fmt.Sprintf("Preset %d saved as '%s'", presetID, req.Name),
+		})
+	}
+}
+
+func (a *API) onPTZDeletePreset(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+	presetIDStr := ctx.Param("presetId")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid preset ID",
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err = ptzController.DeletePreset(presetID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to delete preset: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: fmt.Sprintf("Preset %d deleted", presetID),
 	})
 }
 
