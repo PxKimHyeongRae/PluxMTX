@@ -121,7 +121,8 @@ type Path struct {
 	SRTReadPassphrase          string   `json:"srtReadPassphrase"`
 	Fallback                   string   `json:"fallback"`
 	UseAbsoluteTimestamp       bool     `json:"useAbsoluteTimestamp"`
-	PTZ                        bool     `json:"ptz"` // PTZ control support
+	PTZ                        bool     `json:"ptz"`     // PTZ control support
+	PTZPort                    int      `json:"ptzPort"` // PTZ control port
 
 	// Record
 	Record                bool         `json:"record"`

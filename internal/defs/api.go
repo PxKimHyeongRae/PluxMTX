@@ -85,6 +85,8 @@ type APIPath struct {
 	BytesReceived uint64                  `json:"bytesReceived"`
 	BytesSent     uint64                  `json:"bytesSent"`
 	Readers       []APIPathSourceOrReader `json:"readers"`
+	PTZ           bool                    `json:"ptz"`
+	PTZPort       int                     `json:"ptzPort"`
 }
 
 // APIPathList is a list of paths.

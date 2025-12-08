@@ -16,6 +16,7 @@ import (
 // PTZConfig holds PTZ configuration for a camera
 type PTZConfig struct {
 	Host     string `json:"host"`
+	PTZPort  int    `json:"ptzPort"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -36,8 +37,9 @@ type PTZResponse struct {
 
 // PathConfig represents a single path configuration in mediamtx.yml
 type PathConfig struct {
-	Source string `yaml:"source"`
-	PTZ    bool   `yaml:"ptz"`
+	Source  string `yaml:"source"`
+	PTZ     bool   `yaml:"ptz"`
+	PTZPort int    `yaml:"ptzPort"`
 }
 
 // FullConfig represents the complete mediamtx.yml structure
@@ -102,6 +104,7 @@ func loadPTZCameras() (map[string]PTZConfig, error) {
 		if host != "" && username != "" {
 			ptzCameras[name] = PTZConfig{
 				Host:     host,
+				PTZPort:  pathConfig.PTZPort,
 				Username: username,
 				Password: password,
 			}
@@ -142,7 +145,7 @@ func (s *httpServer) onPTZMove(ctx *gin.Context) {
 		return
 	}
 
-	ptzController := ptz.NewHikvisionPTZ(config.Host, config.Username, config.Password)
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
 	err := ptzController.Move(req.Pan, req.Tilt, req.Zoom)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, PTZResponse{
@@ -170,7 +173,7 @@ func (s *httpServer) onPTZStop(ctx *gin.Context) {
 		return
 	}
 
-	ptzController := ptz.NewHikvisionPTZ(config.Host, config.Username, config.Password)
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
 	err := ptzController.Stop()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, PTZResponse{
@@ -198,7 +201,7 @@ func (s *httpServer) onPTZStatus(ctx *gin.Context) {
 		return
 	}
 
-	ptzController := ptz.NewHikvisionPTZ(config.Host, config.Username, config.Password)
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
 	status, err := ptzController.GetStatus()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, PTZResponse{
@@ -226,7 +229,7 @@ func (s *httpServer) onPTZPresets(ctx *gin.Context) {
 		return
 	}
 
-	ptzController := ptz.NewHikvisionPTZ(config.Host, config.Username, config.Password)
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
 	presets, err := ptzController.GetPresets()
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, PTZResponse{
@@ -264,7 +267,7 @@ func (s *httpServer) onPTZGotoPreset(ctx *gin.Context) {
 		return
 	}
 
-	ptzController := ptz.NewHikvisionPTZ(config.Host, config.Username, config.Password)
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
 	err = ptzController.GotoPreset(presetID)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, PTZResponse{

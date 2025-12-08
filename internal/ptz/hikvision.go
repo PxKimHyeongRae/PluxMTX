@@ -14,21 +14,31 @@ import (
 // HikvisionPTZ handles PTZ control for Hikvision cameras via ISAPI
 type HikvisionPTZ struct {
 	Host     string
+	PTZPort  int
 	Username string
 	Password string
 	client   *http.Client
 }
 
 // NewHikvisionPTZ creates a new Hikvision PTZ controller
-func NewHikvisionPTZ(host, username, password string) *HikvisionPTZ {
+func NewHikvisionPTZ(host string, ptzPort int, username, password string) *HikvisionPTZ {
 	return &HikvisionPTZ{
 		Host:     host,
+		PTZPort:  ptzPort,
 		Username: username,
 		Password: password,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
+}
+
+// getHostPort returns the host:port combination for PTZ control
+func (h *HikvisionPTZ) getHostPort() string {
+	if h.PTZPort != 0 {
+		return fmt.Sprintf("%s:%d", h.Host, h.PTZPort)
+	}
+	return h.Host
 }
 
 // Move performs continuous PTZ movement
@@ -43,7 +53,7 @@ func (h *HikvisionPTZ) Move(pan, tilt, zoom int) error {
     <zoom>%d</zoom>
 </PTZData>`, pan, tilt, zoom)
 
-	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/continuous", h.Host)
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/continuous", h.getHostPort())
 	return h.sendRequest("PUT", url, xmlData)
 }
 
@@ -54,13 +64,13 @@ func (h *HikvisionPTZ) Stop() error {
 
 // GetStatus gets current PTZ status
 func (h *HikvisionPTZ) GetStatus() (string, error) {
-	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/status", h.Host)
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/status", h.getHostPort())
 	return h.sendGetRequest(url)
 }
 
 // GetPresets gets list of available presets
 func (h *HikvisionPTZ) GetPresets() (string, error) {
-	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets", h.Host)
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets", h.getHostPort())
 	return h.sendGetRequest(url)
 }
 
@@ -73,7 +83,7 @@ func (h *HikvisionPTZ) GotoPreset(presetID int) error {
     </AbsoluteHigh>
 </PTZData>`, presetID)
 
-	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets/%d/goto", h.Host, presetID)
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/presets/%d/goto", h.getHostPort(), presetID)
 	return h.sendRequest("PUT", url, xmlData)
 }
 
