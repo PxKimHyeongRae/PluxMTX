@@ -131,6 +131,11 @@ func (h *HikvisionPTZ) sendGetRequest(urlStr string) (string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		// Try with digest auth
+		return h.sendDigestGetRequest(urlStr, resp)
+	}
+
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read response: %w", err)
@@ -138,6 +143,70 @@ func (h *HikvisionPTZ) sendGetRequest(urlStr string) (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return string(bodyBytes), nil
+}
+
+// sendDigestGetRequest sends a GET request with digest authentication and returns the response
+func (h *HikvisionPTZ) sendDigestGetRequest(urlStr string, authResp *http.Response) (string, error) {
+	// Parse WWW-Authenticate header
+	authHeader := authResp.Header.Get("WWW-Authenticate")
+	if authHeader == "" {
+		return "", fmt.Errorf("no WWW-Authenticate header")
+	}
+
+	req, err := http.NewRequest("GET", urlStr, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create digest request: %w", err)
+	}
+
+	// Parse digest challenge
+	digestParams := parseDigestAuth(authHeader)
+
+	// Calculate digest response
+	uri := req.URL.Path
+	if req.URL.RawQuery != "" {
+		uri += "?" + req.URL.RawQuery
+	}
+
+	ha1 := md5Hash(h.Username + ":" + digestParams["realm"] + ":" + h.Password)
+	ha2 := md5Hash("GET:" + uri)
+
+	var response string
+	var authHeaderValue string
+
+	if qop, ok := digestParams["qop"]; ok && qop == "auth" {
+		// With qop
+		cnonce := "0a4f113b"
+		nc := "00000001"
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", qop=%s, nc=%s, cnonce="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, qop, nc, cnonce, response)
+	} else {
+		// Without qop
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, response)
+	}
+
+	req.Header.Set("Authorization", authHeaderValue)
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("digest request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("digest request failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return string(bodyBytes), nil
@@ -151,8 +220,6 @@ func (h *HikvisionPTZ) sendDigestRequest(method, urlStr, body string, authResp *
 		return fmt.Errorf("no WWW-Authenticate header")
 	}
 
-	// For simplicity, we'll use a basic digest auth implementation
-	// In production, you might want to use a proper digest auth library
 	req, err := http.NewRequest(method, urlStr, strings.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("failed to create digest request: %w", err)
@@ -164,14 +231,32 @@ func (h *HikvisionPTZ) sendDigestRequest(method, urlStr, body string, authResp *
 	digestParams := parseDigestAuth(authHeader)
 
 	// Calculate digest response
+	uri := req.URL.Path
+	if req.URL.RawQuery != "" {
+		uri += "?" + req.URL.RawQuery
+	}
+
 	ha1 := md5Hash(h.Username + ":" + digestParams["realm"] + ":" + h.Password)
-	ha2 := md5Hash(method + ":" + req.URL.Path)
+	ha2 := md5Hash(method + ":" + uri)
 
-	response := md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + ha2)
+	var response string
+	var authHeaderValue string
 
-	// Build authorization header
-	authHeaderValue := fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
-		h.Username, digestParams["realm"], digestParams["nonce"], req.URL.Path, response)
+	if qop, ok := digestParams["qop"]; ok && qop == "auth" {
+		// With qop
+		cnonce := "0a4f113b"
+		nc := "00000001"
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + nc + ":" + cnonce + ":" + qop + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", qop=%s, nc=%s, cnonce="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, qop, nc, cnonce, response)
+	} else {
+		// Without qop
+		response = md5Hash(ha1 + ":" + digestParams["nonce"] + ":" + ha2)
+
+		authHeaderValue = fmt.Sprintf(`Digest username="%s", realm="%s", nonce="%s", uri="%s", response="%s"`,
+			h.Username, digestParams["realm"], digestParams["nonce"], uri, response)
+	}
 
 	req.Header.Set("Authorization", authHeaderValue)
 

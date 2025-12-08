@@ -22,7 +22,7 @@ $ImageName = "mediamtx:local"
 $ImageTarFile = "mediamtx.tar"
 
 # Remote Server Path and File Information
-$RemotePath = "/home/pluxity/docker/aiot"
+$RemotePath = "/home/pluxity/docker/media-server"
 $RemoteComposeFile = "docker-compose.mediamtx.yml"
 $RemoteConfigFile = "mediamtx.yml"
 

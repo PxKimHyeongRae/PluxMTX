@@ -449,6 +449,8 @@ let currentCamera = null;
 let currentReader = null;
 let ptzCameras = [];
 let currentSpeed = 50;
+let apiPort = null;
+let ptzBaseURL = '';
 
 const cameraSelector = document.getElementById('cameraSelector');
 const videoPlayer = document.getElementById('videoPlayer');
@@ -461,10 +463,39 @@ const speedValue = document.getElementById('speedValue');
 const infoName = document.getElementById('infoName');
 const infoStatus = document.getElementById('infoStatus');
 
+// Load port configuration from server
+const loadPortConfig = async () => {
+  try {
+    const response = await fetch('/config/ports');
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const data = await response.json();
+    if (data && data.api) {
+      apiPort = data.api;
+      ptzBaseURL = `http://${window.location.hostname}:${apiPort}/v3/ptz`;
+      console.log('✓ Port configuration loaded from server - API port:', apiPort);
+      console.log('✓ PTZ API URL:', ptzBaseURL);
+    } else {
+      throw new Error('Invalid port config response');
+    }
+  } catch (error) {
+    // Fallback to MediaMTX default API port (9997)
+    console.error('Failed to load port config from server:', error);
+    apiPort = 9997;
+    ptzBaseURL = `http://${window.location.hostname}:9997/v3/ptz`;
+    console.warn('⚠ Using fallback API port:', apiPort);
+  }
+};
+
 // Load PTZ cameras
 const loadPTZCameras = async () => {
+  if (!ptzBaseURL) {
+    await loadPortConfig();
+  }
+
   try {
-    const response = await fetch('/ptz/cameras');
+    const response = await fetch(`${ptzBaseURL}/cameras`);
     const data = await response.json();
 
     if (data.success && data.data) {
@@ -519,7 +550,7 @@ const initializeVideo = (cameraName) => {
 // Load presets
 const loadPresets = async (cameraName) => {
   try {
-    const response = await fetch(`/ptz/${cameraName}/presets`);
+    const response = await fetch(`${ptzBaseURL}/${cameraName}/presets`);
     const data = await response.json();
 
     if (data.success && data.data) {
@@ -561,7 +592,7 @@ const loadPresets = async (cameraName) => {
 // PTZ Control Functions
 const ptzMove = async (camera, pan, tilt, zoom) => {
   try {
-    const response = await fetch(`/ptz/${camera}/move`, {
+    const response = await fetch(`${ptzBaseURL}/${camera}/move`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pan, tilt, zoom })
@@ -577,7 +608,7 @@ const ptzMove = async (camera, pan, tilt, zoom) => {
 
 const ptzStop = async (camera) => {
   try {
-    await fetch(`/ptz/${camera}/stop`, {
+    await fetch(`${ptzBaseURL}/${camera}/stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -588,7 +619,7 @@ const ptzStop = async (camera) => {
 
 const gotoPreset = async (camera, presetId) => {
   try {
-    const response = await fetch(`/ptz/${camera}/preset/${presetId}`, {
+    const response = await fetch(`${ptzBaseURL}/${camera}/preset/${presetId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' }
     });
@@ -688,7 +719,8 @@ document.querySelectorAll('.ptz-btn:not(.disabled), .zoom-btn').forEach(btn => {
 });
 
 // Initialize on load
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
+  await loadPortConfig();
   loadPTZCameras();
 });
 

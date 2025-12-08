@@ -7,11 +7,11 @@ services:
     restart: unless-stopped
 
     ports:
-      - "${MEDIA_MTX_WEBRTC_PORT}:8117"      # WebRTC 시그널링 + Dashboard
-      - "${MEDIA_MTX_WEBRTC_UDP_PORT}:8118/udp"  # WebRTC ICE/UDP
-      - "${MEDIA_MTX_API_PORT}:8119"         # API
-      - "${MEDIA_MTX_HLS_PORT}:8120"         # HLS
-      - "${MEDIA_MTX_RTSP_PORT}:8121"        # RTSP
+      - "${MEDIA_MTX_WEBRTC_PORT:-8889}:${MEDIA_MTX_WEBRTC_PORT:-8889}"          # WebRTC 시그널링 + Dashboard
+      - "${MEDIA_MTX_WEBRTC_UDP_PORT:-8189}:${MEDIA_MTX_WEBRTC_UDP_PORT:-8189}/udp"  # WebRTC ICE/UDP
+      - "${MEDIA_MTX_API_PORT:-9997}:${MEDIA_MTX_API_PORT:-9997}"             # API
+      - "${MEDIA_MTX_HLS_PORT:-8888}:${MEDIA_MTX_HLS_PORT:-8888}"             # HLS
+      - "${MEDIA_MTX_RTSP_PORT:-8121}:${MEDIA_MTX_RTSP_PORT:-8121}"            # RTSP
 
     volumes:
       # Configuration file

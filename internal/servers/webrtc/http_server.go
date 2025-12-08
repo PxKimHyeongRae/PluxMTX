@@ -107,17 +107,6 @@ func (s *httpServer) initialize() error {
 	// Config API - provides port configuration to frontend
 	router.GET("/config/ports", s.onConfigPorts)
 
-	// PTZ API routes
-	ptzGroup := router.Group("/ptz")
-	{
-		ptzGroup.GET("/cameras", s.onPTZList)
-		ptzGroup.POST("/:camera/move", s.onPTZMove)
-		ptzGroup.POST("/:camera/stop", s.onPTZStop)
-		ptzGroup.GET("/:camera/status", s.onPTZStatus)
-		ptzGroup.GET("/:camera/presets", s.onPTZPresets)
-		ptzGroup.POST("/:camera/preset/:presetId", s.onPTZGotoPreset)
-	}
-
 	router.Use(s.onRequest)
 
 	s.inner = &httpp.Server{

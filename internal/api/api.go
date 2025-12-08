@@ -6,15 +6,18 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gopkg.in/yaml.v3"
 
 	"github.com/bluenviron/mediamtx/internal/auth"
 	"github.com/bluenviron/mediamtx/internal/conf"
@@ -22,6 +25,7 @@ import (
 	"github.com/bluenviron/mediamtx/internal/defs"
 	"github.com/bluenviron/mediamtx/internal/logger"
 	"github.com/bluenviron/mediamtx/internal/protocols/httpp"
+	"github.com/bluenviron/mediamtx/internal/ptz"
 	"github.com/bluenviron/mediamtx/internal/recordstore"
 	"github.com/bluenviron/mediamtx/internal/servers/hls"
 	"github.com/bluenviron/mediamtx/internal/servers/rtmp"
@@ -29,6 +33,40 @@ import (
 	"github.com/bluenviron/mediamtx/internal/servers/srt"
 	"github.com/bluenviron/mediamtx/internal/servers/webrtc"
 )
+
+// PTZ related types
+type PTZConfig struct {
+	Host     string `json:"host"`
+	PTZPort  int    `json:"ptzPort"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type PTZMoveRequest struct {
+	Pan  int `json:"pan"`
+	Tilt int `json:"tilt"`
+	Zoom int `json:"zoom"`
+}
+
+type PTZResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message,omitempty"`
+	Data    any    `json:"data,omitempty"`
+}
+
+type PathConfig struct {
+	Source  string `yaml:"source"`
+	PTZ     bool   `yaml:"ptz"`
+	PTZPort int    `yaml:"ptzPort"`
+}
+
+type FullConfig struct {
+	APIAddress    string                `yaml:"apiAddress"`
+	HLSAddress    string                `yaml:"hlsAddress"`
+	RTSPAddress   string                `yaml:"rtspAddress"`
+	WebRTCAddress string                `yaml:"webrtcAddress"`
+	Paths         map[string]PathConfig `yaml:"paths"`
+}
 
 func interfaceIsEmpty(i any) bool {
 	return reflect.ValueOf(i).Kind() != reflect.Ptr || reflect.ValueOf(i).IsNil()
@@ -110,12 +148,24 @@ type API struct {
 	SRTServer      defs.APISRTServer
 	Parent         apiParent
 
+	ptzCameras map[string]PTZConfig // PTZ camera configuration cache
 	httpServer *httpp.Server
 	mutex      sync.RWMutex
 }
 
 // Initialize initializes API.
 func (a *API) Initialize() error {
+	// Load PTZ camera configurations once at startup
+	ptzCameras, err := loadPTZCameras()
+	if err != nil {
+		// Log warning but don't fail server startup
+		a.Log(logger.Warn, "failed to load PTZ cameras: %v", err)
+		a.ptzCameras = make(map[string]PTZConfig)
+	} else {
+		a.ptzCameras = ptzCameras
+		a.Log(logger.Info, "loaded %d PTZ camera(s)", len(ptzCameras))
+	}
+
 	router := gin.New()
 	router.SetTrustedProxies(a.TrustedProxies.ToTrustedProxies()) //nolint:errcheck
 
@@ -193,6 +243,17 @@ func (a *API) Initialize() error {
 	group.GET("/recordings/get/*name", a.onRecordingsGet)
 	group.DELETE("/recordings/deletesegment", a.onRecordingDeleteSegment)
 
+	// PTZ API routes
+	ptzGroup := group.Group("/ptz")
+	{
+		ptzGroup.GET("/cameras", a.onPTZList)
+		ptzGroup.POST("/:camera/move", a.onPTZMove)
+		ptzGroup.POST("/:camera/stop", a.onPTZStop)
+		ptzGroup.GET("/:camera/status", a.onPTZStatus)
+		ptzGroup.GET("/:camera/presets", a.onPTZPresets)
+		ptzGroup.POST("/:camera/preset/:presetId", a.onPTZGotoPreset)
+	}
+
 	a.httpServer = &httpp.Server{
 		Address:      a.Address,
 		AllowOrigins: a.AllowOrigins,
@@ -204,7 +265,7 @@ func (a *API) Initialize() error {
 		Handler:      router,
 		Parent:       a,
 	}
-	err := a.httpServer.Initialize()
+	err = a.httpServer.Initialize()
 	if err != nil {
 		return err
 	}
@@ -1142,4 +1203,250 @@ func (a *API) ReloadConf(conf *conf.Conf) {
 	a.mutex.Lock()
 	defer a.mutex.Unlock()
 	a.Conf = conf
+}
+
+// PTZ related functions
+
+// loadPTZCameras dynamically loads PTZ camera configurations from mediamtx.yml
+func loadPTZCameras() (map[string]PTZConfig, error) {
+	configPaths := []string{
+		"/app/mediamtx.yml",
+		"./mediamtx.yml",
+		"/etc/mediamtx.yml",
+	}
+
+	var configData []byte
+	var err error
+
+	for _, path := range configPaths {
+		configData, err = os.ReadFile(path)
+		if err == nil {
+			break
+		}
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to read mediamtx.yml: %w", err)
+	}
+
+	var config FullConfig
+	if err := yaml.Unmarshal(configData, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	}
+
+	ptzCameras := make(map[string]PTZConfig)
+
+	for name, pathConfig := range config.Paths {
+		// Only process paths with ptz: true
+		if !pathConfig.PTZ {
+			continue
+		}
+
+		// Parse RTSP URL to extract host, username, password
+		parsedURL, err := url.Parse(pathConfig.Source)
+		if err != nil {
+			continue
+		}
+
+		host := parsedURL.Hostname()
+		username := ""
+		password := ""
+
+		if parsedURL.User != nil {
+			username = parsedURL.User.Username()
+			password, _ = parsedURL.User.Password()
+		}
+
+		if host != "" && username != "" {
+			ptzCameras[name] = PTZConfig{
+				Host:     host,
+				PTZPort:  pathConfig.PTZPort,
+				Username: username,
+				Password: password,
+			}
+		}
+	}
+
+	return ptzCameras, nil
+}
+
+// getPTZConfig retrieves PTZ configuration for a specific camera from cache
+func (a *API) getPTZConfig(cameraName string) (PTZConfig, bool) {
+	a.mutex.RLock()
+	defer a.mutex.RUnlock()
+	config, exists := a.ptzCameras[cameraName]
+	return config, exists
+}
+
+func (a *API) onPTZMove(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	var req PTZMoveRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Invalid request: %v", err),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err := ptzController.Move(req.Pan, req.Tilt, req.Zoom)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ move failed: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: "PTZ move command sent successfully",
+	})
+}
+
+func (a *API) onPTZStop(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err := ptzController.Stop()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ stop failed: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: "PTZ stopped successfully",
+	})
+}
+
+func (a *API) onPTZStatus(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	status, err := ptzController.GetStatus()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to get PTZ status: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Data:    status,
+	})
+}
+
+func (a *API) onPTZPresets(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	presets, err := ptzController.GetPresets()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to get presets: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Data:    presets,
+	})
+}
+
+func (a *API) onPTZGotoPreset(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+	presetIDStr := ctx.Param("presetId")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	presetID, err := strconv.Atoi(presetIDStr)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid preset ID",
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err = ptzController.GotoPreset(presetID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to go to preset: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: fmt.Sprintf("Moving to preset %d", presetID),
+	})
+}
+
+func (a *API) onPTZList(ctx *gin.Context) {
+	a.mutex.RLock()
+	cameras := make([]string, 0, len(a.ptzCameras))
+	for name := range a.ptzCameras {
+		cameras = append(cameras, name)
+	}
+	a.mutex.RUnlock()
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Data:    cameras,
+	})
 }

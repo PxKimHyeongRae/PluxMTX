@@ -1,15 +1,16 @@
 # --- 로그 설정 ---
 logLevel: info
 logDestinations: [stdout, file]
-logFile: /var/log/mediamtx/mediamtx.log
+#logFile: /var/log/mediamtx/mediamtx.log
+logFile: ./mediamtx.log
 
 # --- API 설정 ---
 api: yes
-apiAddress: :8119
+apiAddress: :9997
 
 # --- HLS 설정 (Low Latency) ---
 hls: yes
-hlsAddress: :8120
+hlsAddress: :8888
 hlsAlwaysRemux: no           # 모든 경로에서 항상 HLS 스트리밍 생성
 hlsVariant: lowLatency        # 저지연 HLS 형식
 hlsSegmentCount: 7            # 재생 목록에 포함할 세그먼트 수
@@ -22,8 +23,8 @@ rtspAddress: :8121
 
 # --- WebRTC 설정 ---
 webrtc: yes
-webrtcAddress: :8117
-webrtcLocalUDPAddress: :8118
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
 webrtcAdditionalHosts:
   - 192.168.10.181
 webrtcAllowOrigin: "*"
