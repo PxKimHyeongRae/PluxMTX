@@ -30,6 +30,30 @@ type PTZPresetList struct {
 	Presets []PTZPreset `xml:"PTZPreset" json:"presets"`
 }
 
+// ImageChannel represents camera image settings
+type ImageChannel struct {
+	XMLName            xml.Name `xml:"ImageChannel"`
+	FocusConfiguration struct {
+		FocusStyle   string `xml:"focusStyle" json:"focusStyle"`
+		FocusLimited int    `xml:"focusLimited" json:"focusLimited"`
+	} `xml:"FocusConfiguration" json:"focus"`
+	Iris struct {
+		IrisLevel         int `xml:"IrisLevel" json:"level"`
+		MaxIrisLevelLimit int `xml:"maxIrisLevelLimit" json:"maxLimit"`
+		MinIrisLevelLimit int `xml:"minIrisLevelLimit" json:"minLimit"`
+	} `xml:"Iris" json:"iris"`
+}
+
+// PTZStatus represents the current PTZ position status
+type PTZStatus struct {
+	XMLName      xml.Name `xml:"PTZStatus" json:"-"`
+	AbsoluteHigh struct {
+		Elevation    int `xml:"elevation" json:"elevation"`
+		Azimuth      int `xml:"azimuth" json:"azimuth"`
+		AbsoluteZoom int `xml:"absoluteZoom" json:"zoom"`
+	} `xml:"AbsoluteHigh" json:"position"`
+}
+
 // HikvisionPTZ handles PTZ control for Hikvision cameras via ISAPI
 type HikvisionPTZ struct {
 	Host     string
@@ -76,15 +100,59 @@ func (h *HikvisionPTZ) Move(pan, tilt, zoom int) error {
 	return h.sendRequest("PUT", url, xmlData)
 }
 
+// Focus performs continuous focus adjustment
+// speed: -100 to 100 (negative=focus near, positive=focus far, 0=stop)
+func (h *HikvisionPTZ) Focus(speed int) error {
+	xmlData := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<PTZData>
+    <pan>0</pan>
+    <tilt>0</tilt>
+    <zoom>0</zoom>
+    <Momentary>
+        <focus>%d</focus>
+    </Momentary>
+</PTZData>`, speed)
+
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/continuous", h.getHostPort())
+	return h.sendRequest("PUT", url, xmlData)
+}
+
+// Iris performs continuous iris (aperture) adjustment
+// speed: -100 to 100 (negative=close iris, positive=open iris, 0=stop)
+func (h *HikvisionPTZ) Iris(speed int) error {
+	xmlData := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<PTZData>
+    <pan>0</pan>
+    <tilt>0</tilt>
+    <zoom>0</zoom>
+    <Momentary>
+        <iris>%d</iris>
+    </Momentary>
+</PTZData>`, speed)
+
+	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/continuous", h.getHostPort())
+	return h.sendRequest("PUT", url, xmlData)
+}
+
 // Stop stops all PTZ movement
 func (h *HikvisionPTZ) Stop() error {
 	return h.Move(0, 0, 0)
 }
 
-// GetStatus gets current PTZ status
-func (h *HikvisionPTZ) GetStatus() (string, error) {
+// GetStatus gets current PTZ status and returns parsed status
+func (h *HikvisionPTZ) GetStatus() (*PTZStatus, error) {
 	url := fmt.Sprintf("http://%s/ISAPI/PTZCtrl/channels/1/status", h.getHostPort())
-	return h.sendGetRequest(url)
+	xmlData, err := h.sendGetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var status PTZStatus
+	if err := xml.Unmarshal([]byte(xmlData), &status); err != nil {
+		return nil, fmt.Errorf("failed to parse PTZ status XML: %w", err)
+	}
+
+	return &status, nil
 }
 
 // GetPresets gets list of available presets and returns parsed preset list
@@ -101,6 +169,22 @@ func (h *HikvisionPTZ) GetPresets() ([]PTZPreset, error) {
 	}
 
 	return presetList.Presets, nil
+}
+
+// GetImageSettings gets camera image settings including focus and iris configuration
+func (h *HikvisionPTZ) GetImageSettings() (*ImageChannel, error) {
+	url := fmt.Sprintf("http://%s/ISAPI/Image/channels/1", h.getHostPort())
+	xmlData, err := h.sendGetRequest(url)
+	if err != nil {
+		return nil, err
+	}
+
+	var imageChannel ImageChannel
+	if err := xml.Unmarshal([]byte(xmlData), &imageChannel); err != nil {
+		return nil, fmt.Errorf("failed to parse image settings XML: %w", err)
+	}
+
+	return &imageChannel, nil
 }
 
 // GotoPreset moves to a specific preset position

@@ -249,6 +249,10 @@ func (a *API) Initialize() error {
 		ptzGroup.GET("/cameras", a.onPTZList)
 		ptzGroup.POST("/:camera/move", a.onPTZMove)
 		ptzGroup.POST("/:camera/stop", a.onPTZStop)
+		ptzGroup.POST("/:camera/focus", a.onPTZFocus)
+		ptzGroup.GET("/:camera/focus", a.onPTZGetFocus)
+		ptzGroup.POST("/:camera/iris", a.onPTZIris)
+		ptzGroup.GET("/:camera/iris", a.onPTZGetIris)
 		ptzGroup.GET("/:camera/status", a.onPTZStatus)
 		ptzGroup.GET("/:camera/presets", a.onPTZPresets)
 		ptzGroup.POST("/:camera/preset/:presetId", a.onPTZGotoPreset)
@@ -1345,6 +1349,84 @@ func (a *API) onPTZStop(ctx *gin.Context) {
 	})
 }
 
+func (a *API) onPTZFocus(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	var req struct {
+		Speed int `json:"speed"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err := ptzController.Focus(req.Speed)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Focus adjustment failed: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: "Focus adjustment command sent successfully",
+	})
+}
+
+func (a *API) onPTZIris(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	var req struct {
+		Speed int `json:"speed"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, PTZResponse{
+			Success: false,
+			Message: "Invalid request body",
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	err := ptzController.Iris(req.Speed)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Iris adjustment failed: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Message: "Iris adjustment command sent successfully",
+	})
+}
+
 func (a *API) onPTZStatus(ctx *gin.Context) {
 	cameraName := ctx.Param("camera")
 
@@ -1569,5 +1651,61 @@ func (a *API) onPTZList(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, PTZResponse{
 		Success: true,
 		Data:    cameras,
+	})
+}
+
+func (a *API) onPTZGetFocus(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	imageSettings, err := ptzController.GetImageSettings()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to get focus settings: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Data:    imageSettings.FocusConfiguration,
+	})
+}
+
+func (a *API) onPTZGetIris(ctx *gin.Context) {
+	cameraName := ctx.Param("camera")
+
+	config, exists := a.getPTZConfig(cameraName)
+	if !exists {
+		ctx.JSON(http.StatusNotFound, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("PTZ not configured for camera: %s", cameraName),
+		})
+		return
+	}
+
+	ptzController := ptz.NewHikvisionPTZ(config.Host, config.PTZPort, config.Username, config.Password)
+	imageSettings, err := ptzController.GetImageSettings()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, PTZResponse{
+			Success: false,
+			Message: fmt.Sprintf("Failed to get iris settings: %v", err),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, PTZResponse{
+		Success: true,
+		Data:    imageSettings.Iris,
 	})
 }
