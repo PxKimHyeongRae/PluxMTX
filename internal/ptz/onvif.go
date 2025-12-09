@@ -7,6 +7,7 @@ import (
 
 	"github.com/use-go/onvif"
 	"github.com/use-go/onvif/device"
+	onvif_imaging "github.com/use-go/onvif/Imaging"
 	"github.com/use-go/onvif/media"
 	onvif_ptz "github.com/use-go/onvif/ptz"
 	"github.com/use-go/onvif/xsd"
@@ -15,12 +16,13 @@ import (
 
 // OnvifPTZ ONVIF 호환 카메라의 PTZ 제어 처리
 type OnvifPTZ struct {
-	Host         string
-	Port         int
-	Username     string
-	Password     string
-	device       *onvif.Device
-	profileToken xsd_onvif.ReferenceToken
+	Host              string
+	Port              int
+	Username          string
+	Password          string
+	device            *onvif.Device
+	profileToken      xsd_onvif.ReferenceToken
+	videoSourceToken  xsd_onvif.ReferenceToken
 }
 
 // NewOnvifPTZ creates a new ONVIF PTZ controller
@@ -79,8 +81,11 @@ func (o *OnvifPTZ) Connect() error {
 		Body struct {
 			GetProfilesResponse struct {
 				Profiles []struct {
-					Token string `xml:"token,attr"`
-					Name  string
+					Token                    string `xml:"token,attr"`
+					Name                     string
+					VideoSourceConfiguration struct {
+						SourceToken string
+					}
 				}
 			}
 		}
@@ -95,7 +100,9 @@ func (o *OnvifPTZ) Connect() error {
 	}
 
 	// Use the first profile
-	o.profileToken = xsd_onvif.ReferenceToken(envelope.Body.GetProfilesResponse.Profiles[0].Token)
+	profile := envelope.Body.GetProfilesResponse.Profiles[0]
+	o.profileToken = xsd_onvif.ReferenceToken(profile.Token)
+	o.videoSourceToken = xsd_onvif.ReferenceToken(profile.VideoSourceConfiguration.SourceToken)
 
 	return nil
 }
@@ -235,20 +242,60 @@ func (o *OnvifPTZ) Focus(speed int) error {
 		return err
 	}
 
-	// ONVIF 포커스 제어는 일반적으로 Imaging 서비스의 일부
-	// 기본 구현에서는 미구현 에러 반환
-	return fmt.Errorf("focus control requires Imaging service (not yet implemented)")
+	// speed가 0이면 Stop
+	if speed == 0 {
+		return o.Stop()
+	}
+
+	// Convert -100~100 to -1.0~1.0
+	focusSpeed := float64(speed) / 100.0
+
+	// Timeout is REQUIRED for ContinuousMove
+	timeout := xsd.Duration("PT60S")
+
+	// Try PTZ ContinuousMove with Focus
+	// Some cameras support Focus in PTZ service instead of Imaging service
+	req := onvif_ptz.ContinuousMove{
+		ProfileToken: o.profileToken,
+		Velocity: xsd_onvif.PTZSpeed{
+			PanTilt: xsd_onvif.Vector2D{
+				X: 0,
+				Y: 0,
+			},
+			Zoom: xsd_onvif.Vector1D{
+				X: focusSpeed,  // Use Zoom channel for Focus control
+			},
+		},
+		Timeout: timeout,
+	}
+
+	resp, err := o.device.CallMethod(req)
+	if err != nil {
+		return fmt.Errorf("ptz continuous move focus failed: %w", err)
+	}
+
+	if resp != nil {
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("ptz continuous move focus failed with status %d: %s", resp.StatusCode, string(body))
+		}
+	}
+
+	return nil
 }
 
 // Iris 연속 조리개 조정 수행
 // speed: -100 ~ 100 (음수=조리개 닫힘, 양수=조리개 열림, 0=정지)
+// Note: ONVIF Iris control is not supported by most cameras
 func (o *OnvifPTZ) Iris(speed int) error {
 	if err := o.ensureConnected(); err != nil {
 		return err
 	}
 
-	// ONVIF 조리개 제어는 Imaging 서비스의 일부
-	return fmt.Errorf("iris control requires Imaging service (not yet implemented)")
+	// ONVIF Iris control via SetImagingSettings is not reliably supported
+	// Most cameras reject SetImagingSettings with Iris parameter
+	return fmt.Errorf("iris control not supported via ONVIF on this camera (use Hikvision ISAPI if available)")
 }
 
 // GetStatus 현재 PTZ 상태 조회 및 파싱된 상태 반환 (Controller 인터페이스 구현)
