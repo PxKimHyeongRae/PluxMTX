@@ -59,67 +59,34 @@ func (h *HikvisionPTZ) Iris(speed int) error {
 }
 ```
 
-### ✅ ONVIF - Focus 지원, Iris 미지원
+### ❌ ONVIF - Focus/Iris 모두 미지원
 
 **구현 위치**: `internal/ptz/onvif.go`
 
-#### Focus: ✅ 지원 (PTZ ContinuousMove 사용)
-ONVIF Imaging 서비스의 Move는 대부분 카메라에서 지원하지 않지만, PTZ ContinuousMove의 **Zoom 채널**을 사용하여 Focus 제어가 가능합니다.
+#### Focus: ❌ 미지원
+ONVIF Imaging 서비스를 통한 Focus 제어는 Hikvision 카메라에서 지원하지 않습니다. Imaging.Move 호출 시 "Not support Absolute" 에러가 발생합니다.
 
 ```go
 // Focus 연속 포커스 조정 수행
-// speed: -100 ~ 100 (음수=근거리 포커스, 양수=원거리 포커스, 0=정지)
+// speed: -100 ~ 100 (음수=근거리/Near 포커스, 양수=원거리/Far 포커스, 0=정지)
+//
+// Note: ONVIF Focus control is not supported by most cameras including Hikvision
+// ONVIF Imaging 서비스를 통한 Focus 제어는 대부분의 카메라에서 지원하지 않습니다.
+// Hikvision 카메라의 경우 ISAPI 프로토콜을 사용하세요.
 func (o *OnvifPTZ) Focus(speed int) error {
     if err := o.ensureConnected(); err != nil {
         return err
     }
 
-    // speed가 0이면 Stop
-    if speed == 0 {
-        return o.Stop()
-    }
-
-    // Convert -100~100 to -1.0~1.0
-    focusSpeed := float64(speed) / 100.0
-
-    // Timeout is REQUIRED for ContinuousMove
-    timeout := xsd.Duration("PT60S")
-
-    // PTZ ContinuousMove의 Zoom 채널을 Focus 제어에 사용
-    req := onvif_ptz.ContinuousMove{
-        ProfileToken: o.profileToken,
-        Velocity: xsd_onvif.PTZSpeed{
-            PanTilt: xsd_onvif.Vector2D{
-                X: 0,
-                Y: 0,
-            },
-            Zoom: xsd_onvif.Vector1D{
-                X: focusSpeed,  // Zoom 채널로 Focus 제어
-            },
-        },
-        Timeout: timeout,
-    }
-
-    resp, err := o.device.CallMethod(req)
-    if err != nil {
-        return fmt.Errorf("ptz continuous move focus failed: %w", err)
-    }
-
-    if resp != nil {
-        defer resp.Body.Close()
-        if resp.StatusCode != 200 {
-            body, _ := io.ReadAll(resp.Body)
-            return fmt.Errorf("ptz continuous move focus failed with status %d: %s", resp.StatusCode, string(body))
-        }
-    }
-
-    return nil
+    // ONVIF Imaging.Move는 Hikvision 카메라에서 "Not support Absolute" 에러 발생
+    // 자세한 내용: docs/ONVIF_IRIS_TEST_RESULT.md 참조
+    return fmt.Errorf("focus control not supported via ONVIF on this camera (use Hikvision ISAPI if available)")
 }
 ```
 
 #### Iris: ❌ 미지원
 ONVIF 표준의 Imaging 서비스를 통한 Iris 제어는 대부분의 Hikvision 카메라에서 지원하지 않습니다.
-자세한 테스트 결과는 [ONVIF_IRIS_TEST_RESULT.md](./ONVIF_IRIS_TEST_RESULT.md)를 참고하세요.
+자세한 테스트 결과는 [ONVIF_IMAGING_TROUBLESHOOTING.md](./ONVIF_IMAGING_TROUBLESHOOTING.md)를 참고하세요.
 
 ```go
 // Iris 연속 조리개 조정 수행
@@ -283,31 +250,22 @@ curl http://localhost:9997/v3/ptz/MY-CAMERA/iris
 </PTZData>
 ```
 
-### ONVIF - Focus ✅, Iris ❌
+### ONVIF - Focus ❌, Iris ❌
 
-**엔드포인트**: ONVIF PTZ Service - `ContinuousMove` 명령
+**엔드포인트**: ONVIF Imaging Service
 
 **지원 상황**:
-- ✅ **Focus**: PTZ ContinuousMove의 Zoom 채널 사용하여 완전 지원
+- ❌ **Focus**: Imaging 서비스 Move 명령 실패 ("Not support Absolute" 에러)
 - ❌ **Iris**: Imaging 서비스 Move/SetImagingSettings 모두 실패
 - ℹ️ GetImagingSettings, GetOptions는 지원하지만 제어 명령은 실패
 
-**Focus 구현 방식** (PTZ ContinuousMove):
-```xml
-<ContinuousMove>
-    <ProfileToken>profile_1</ProfileToken>
-    <Velocity>
-        <PanTilt x="0" y="0"/>
-        <Zoom x="0.5"/>  <!-- Zoom 채널로 Focus 제어 -->
-    </Velocity>
-    <Timeout>PT60S</Timeout>
-</ContinuousMove>
-```
+**Focus/Iris 시도한 방법** (모두 실패):
+1. Imaging Service Move (Focus) - "Not support Absolute" 에러
+2. Imaging Service Move (Iris) - "Not support Absolute" 에러
+3. Imaging Service SetImagingSettings (Iris) - "Invalid BLC" 에러
+4. 상세 결과: [ONVIF_IRIS_TEST_RESULT.md](./ONVIF_IRIS_TEST_RESULT.md)
 
-**Iris 시도한 방법** (모두 실패):
-1. Imaging Service Move - "Not support Absolute" 에러
-2. Imaging Service SetImagingSettings - "Invalid BLC" 에러
-3. 상세 결과: [ONVIF_IRIS_TEST_RESULT.md](./ONVIF_IRIS_TEST_RESULT.md)
+**결론**: Hikvision 카메라는 ONVIF Imaging 서비스를 통한 Focus/Iris 제어를 지원하지 않습니다. ISAPI 프로토콜을 사용해야 합니다.
 
 ## 테스트 결과
 
@@ -367,14 +325,14 @@ curl http://localhost:9997/v3/ptz/MY-CAMERA/iris
 | 제조사 | 프로토콜 | Focus | Iris | 비고 |
 |--------|---------|-------|------|------|
 | Hikvision | ISAPI | ✅ | ✅ | 완전 지원 |
-| Hikvision | ONVIF | ✅ | ❌ | Focus: PTZ Zoom 채널 사용<br>Iris: 미지원 |
-| 기타 | ONVIF | ✅ | ❌ | Focus: PTZ Zoom 채널로 가능<br>Iris: 일반적으로 미지원 |
+| Hikvision | ONVIF | ❌ | ❌ | Imaging 서비스 미지원 |
+| 기타 | ONVIF | ❌ | ❌ | 일반적으로 Imaging 서비스 미지원 |
 
 ### 2. ONVIF 제약사항
 
 **Focus 제어**:
-- ✅ PTZ ContinuousMove의 Zoom 채널을 사용하여 Focus 제어 가능
-- ✅ 대부분의 ONVIF 카메라에서 작동
+- ❌ Imaging 서비스의 Move 명령을 지원하지 않음 ("Not support Absolute" 에러)
+- ℹ️ ONVIF 표준에는 정의되어 있지만 대부분의 카메라가 구현하지 않음
 
 **Iris 제어**:
 - ❌ Imaging 서비스의 Move 명령을 지원하지 않음

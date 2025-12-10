@@ -607,6 +607,7 @@ let ptzCameras = [];
 let currentSpeed = 50;
 let apiPort = null;
 let ptzBaseURL = '';
+let statusUpdateInterval = null;
 
 const cameraSelector = document.getElementById('cameraSelector');
 const videoPlayer = document.getElementById('videoPlayer');
@@ -707,18 +708,53 @@ const initializeVideo = (cameraName) => {
 };
 
 // Get PTZ Status
-const getStatus = async (cameraName) => {
+const getStatus = async (cameraName, showUpdateTime = true) => {
   try {
     const response = await fetch(`${ptzBaseURL}/${cameraName}/status`);
     const data = await response.json();
 
     if (data.success && data.data) {
-      document.getElementById('posPan').textContent = data.data.pan ? data.data.pan.toFixed(2) : '-';
-      document.getElementById('posTilt').textContent = data.data.tilt ? data.data.tilt.toFixed(2) : '-';
-      document.getElementById('posZoom').textContent = data.data.zoom ? data.data.zoom.toFixed(2) : '-';
+      const pan = data.data.pan ? data.data.pan.toFixed(2) : '-';
+      const tilt = data.data.tilt ? data.data.tilt.toFixed(2) : '-';
+      const zoom = data.data.zoom ? data.data.zoom.toFixed(2) : '-';
+
+      document.getElementById('posPan').textContent = pan;
+      document.getElementById('posTilt').textContent = tilt;
+      document.getElementById('posZoom').textContent = zoom;
+
+      // Update status text with PTZ position and update time
+      if (showUpdateTime) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('ko-KR', { hour12: false });
+        statusText.textContent = `${ptzCameras.length} PTZ cameras | Pan: ${pan}, Tilt: ${tilt}, Zoom: ${zoom} | Updated: ${timeStr}`;
+      }
     }
   } catch (error) {
     console.error('Failed to get status:', error);
+  }
+};
+
+// Start auto-update status
+const startStatusAutoUpdate = (cameraName) => {
+  // Clear existing interval if any
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval);
+  }
+
+  // Update immediately
+  getStatus(cameraName);
+
+  // Update every 1 second
+  statusUpdateInterval = setInterval(() => {
+    getStatus(cameraName);
+  }, 1000);
+};
+
+// Stop auto-update status
+const stopStatusAutoUpdate = () => {
+  if (statusUpdateInterval) {
+    clearInterval(statusUpdateInterval);
+    statusUpdateInterval = null;
   }
 };
 
@@ -820,11 +856,25 @@ const ptzStop = async (camera) => {
 
 const focusControl = async (camera, speed) => {
   try {
+    // Send focus command
     await fetch(`${ptzBaseURL}/${camera}/focus`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ speed })
     });
+
+    // Auto-stop after 500ms
+    setTimeout(async () => {
+      try {
+        await fetch(`${ptzBaseURL}/${camera}/focus`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ speed: 0 })
+        });
+      } catch (err) {
+        console.error('Focus stop error:', err);
+      }
+    }, 500);
   } catch (error) {
     console.error('Focus control error:', error);
   }
@@ -832,11 +882,25 @@ const focusControl = async (camera, speed) => {
 
 const irisControl = async (camera, speed) => {
   try {
+    // Send iris command
     await fetch(`${ptzBaseURL}/${camera}/iris`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ speed })
     });
+
+    // Auto-stop after 500ms
+    setTimeout(async () => {
+      try {
+        await fetch(`${ptzBaseURL}/${camera}/iris`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ speed: 0 })
+        });
+      } catch (err) {
+        console.error('Iris stop error:', err);
+      }
+    }, 500);
   } catch (error) {
     console.error('Iris control error:', error);
   }
@@ -850,11 +914,8 @@ const gotoPreset = async (camera, presetId) => {
     });
     const data = await response.json();
     if (data.success) {
-      statusText.textContent = `Moving to preset ${presetId}`;
-      setTimeout(() => {
-        statusText.textContent = `${ptzCameras.length} PTZ cameras available`;
-        getStatus(camera);
-      }, 2000);
+      // Status will be auto-updated by interval
+      console.log(`Moving to preset ${presetId}`);
     }
   } catch (error) {
     console.error('PTZ preset error:', error);
@@ -870,11 +931,8 @@ const savePreset = async (camera, presetId, presetName) => {
     });
     const data = await response.json();
     if (data.success) {
-      statusText.textContent = `Preset ${presetId} saved`;
-      setTimeout(() => {
-        statusText.textContent = `${ptzCameras.length} PTZ cameras available`;
-      }, 2000);
       loadPresets(camera);
+      console.log(`Preset ${presetId} saved`);
     } else {
       alert(`Failed to save preset: ${data.message}`);
     }
@@ -894,11 +952,8 @@ const deletePreset = async (camera, presetId) => {
     });
     const data = await response.json();
     if (data.success) {
-      statusText.textContent = `Preset ${presetId} deleted`;
-      setTimeout(() => {
-        statusText.textContent = `${ptzCameras.length} PTZ cameras available`;
-      }, 2000);
       loadPresets(camera);
+      console.log(`Preset ${presetId} deleted`);
     } else {
       alert(`Failed to delete preset: ${data.message}`);
     }
@@ -955,14 +1010,18 @@ const handlePTZAction = (action) => {
 // Event Listeners
 cameraSelector.addEventListener('change', (e) => {
   const cameraName = e.target.value;
-  if (!cameraName) return;
+
+  if (!cameraName) {
+    stopStatusAutoUpdate();
+    return;
+  }
 
   currentCamera = cameraName;
   infoName.textContent = cameraName;
 
   initializeVideo(cameraName);
   loadPresets(cameraName);
-  getStatus(cameraName);
+  startStatusAutoUpdate(cameraName);  // Start auto-update
   getFocusStatus(cameraName);
   getIrisStatus(cameraName);
 });
@@ -976,7 +1035,7 @@ refreshBtn.addEventListener('click', () => {
   loadPTZCameras();
   if (currentCamera) {
     loadPresets(currentCamera);
-    getStatus(currentCamera);
+    startStatusAutoUpdate(currentCamera);  // Restart auto-update
     getFocusStatus(currentCamera);
     getIrisStatus(currentCamera);
   }
@@ -984,13 +1043,10 @@ refreshBtn.addEventListener('click', () => {
 
 refreshStatusBtn.addEventListener('click', () => {
   if (currentCamera) {
-    getStatus(currentCamera);
+    // Force immediate update
+    getStatus(currentCamera, true);
     getFocusStatus(currentCamera);
     getIrisStatus(currentCamera);
-    statusText.textContent = 'Status updated';
-    setTimeout(() => {
-      statusText.textContent = `${ptzCameras.length} PTZ cameras available`;
-    }, 2000);
   }
 });
 
@@ -1053,6 +1109,7 @@ window.addEventListener('beforeunload', () => {
   if (currentReader) {
     currentReader.close();
   }
+  stopStatusAutoUpdate();
 });
 
 </script>

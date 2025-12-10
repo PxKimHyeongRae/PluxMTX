@@ -235,53 +235,19 @@ func (o *OnvifPTZ) Stop() error {
 }
 
 // Focus 연속 포커스 조정 수행
-// speed: -100 ~ 100 (음수=근거리 포커스, 양수=원거리 포커스, 0=정지)
+// speed: -100 ~ 100 (음수=근거리/Near 포커스, 양수=원거리/Far 포커스, 0=정지)
+//
+// Note: ONVIF Focus control is not supported by most cameras including Hikvision
+// ONVIF Imaging 서비스를 통한 Focus 제어는 대부분의 카메라에서 지원하지 않습니다.
+// Hikvision 카메라의 경우 ISAPI 프로토콜을 사용하세요.
 func (o *OnvifPTZ) Focus(speed int) error {
 	if err := o.ensureConnected(); err != nil {
 		return err
 	}
 
-	// speed가 0이면 Stop
-	if speed == 0 {
-		return o.Stop()
-	}
-
-	// Convert -100~100 to -1.0~1.0
-	focusSpeed := float64(speed) / 100.0
-
-	// Timeout is REQUIRED for ContinuousMove
-	timeout := xsd.Duration("PT60S")
-
-	// Try PTZ ContinuousMove with Focus
-	// Some cameras support Focus in PTZ service instead of Imaging service
-	req := onvif_ptz.ContinuousMove{
-		ProfileToken: o.profileToken,
-		Velocity: xsd_onvif.PTZSpeed{
-			PanTilt: xsd_onvif.Vector2D{
-				X: 0,
-				Y: 0,
-			},
-			Zoom: xsd_onvif.Vector1D{
-				X: focusSpeed, // Use Zoom channel for Focus control
-			},
-		},
-		Timeout: timeout,
-	}
-
-	resp, err := o.device.CallMethod(req)
-	if err != nil {
-		return fmt.Errorf("ptz continuous move focus failed: %w", err)
-	}
-
-	if resp != nil {
-		defer resp.Body.Close()
-		if resp.StatusCode != 200 {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("ptz continuous move focus failed with status %d: %s", resp.StatusCode, string(body))
-		}
-	}
-
-	return nil
+	// ONVIF Imaging.Move는 Hikvision 카메라에서 "Not support Absolute" 에러 발생
+	// 자세한 내용: docs/ONVIF_IMAGING_TROUBLESHOOTING.md 참조
+	return fmt.Errorf("focus control not supported via ONVIF on this camera (use Hikvision ISAPI if available)")
 }
 
 // Iris 연속 조리개 조정 수행
