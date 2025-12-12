@@ -1,6 +1,6 @@
 # PTZ API 명세서
 
-MediaMTX PTZ (Pan-Tilt-Zoom) 제어 API 문서입니다. ONVIF 표준 프로토콜을 사용하여 다양한 제조사의 PTZ 카메라를 HTTP API를 통해 제어할 수 있습니다.
+MediaMTX PTZ (Pan-Tilt-Zoom) 제어 API 문서입니다. ONVIF 표준 및 Hikvision ISAPI 프로토콜을 사용하여 다양한 제조사의 PTZ 카메라를 HTTP API를 통해 제어할 수 있습니다.
 
 ## Base URL
 
@@ -515,14 +515,14 @@ curl -X DELETE http://localhost:9997/v3/ptz/CCTV-TEST-001/presets/1
 
 ### mediamtx.yml 설정 예시
 
-PTZ 기능을 사용하려면 `mediamtx.yml` 파일에서 해당 카메라에 PTZ 설정을 추가해야 합니다:
+PTZ 기능을 사용하려면 `mediamtx.yml` 파일에서 해당 카메라에 PTZ 설정을 추가해야 합니다. 이제 `ptzPort` 대신 `ptzSource` URL을 사용하여 프로토콜과 접속 정보를 함께 지정합니다:
 
 ```yaml
 paths:
   CCTV-TEST-001:
     source: rtsp://admin:password@192.168.1.100:554/Streaming/Channels/101
-    ptz: true          # PTZ 기능 활성화
-    ptzPort: 80        # ONVIF 서비스 포트 (일반적으로 80)
+    ptz: true                 # PTZ 기능 활성화
+    ptzSource: onvif://admin:password@192.168.1.100:80  # PTZ 제어 URL (onvif 또는 hikvision/isapi)
 ```
 
 ### 설정 파라미터
@@ -531,13 +531,37 @@ paths:
 |---------|------|------|------|
 | source | string | 필수 | RTSP URL (username:password 포함) |
 | ptz | boolean | 필수 | PTZ 기능 활성화 여부 (true로 설정) |
-| ptzPort | int | 선택 | ONVIF 서비스 포트 (기본값: 80) |
+| ptzSource | string | ptz=true일 때 필수 | PTZ 제어 URL. 예) `onvif://user:pass@host:port`, `hikvision://user:pass@host:port`, `isapi://user:pass@host:port` |
+
+#### PTZ 소스 URL(`ptzSource`) 형식 및 프로토콜 선택
+
+`ptzSource`는 아래 형식 중 하나로 지정하며, 프로토콜에 따라 내부적으로 사용하는 PTZ 드라이버가 달라집니다.
+
+```text
+onvif://<username>:<password>@<host>:<port>
+hikvision://<username>:<password>@<host>:<port>
+isapi://<username>:<password>@<host>:<port>
+```
+
+- `onvif` 또는 `ptz`(별칭): ONVIF PTZ 사용
+- `hikvision` 또는 `isapi`: Hikvision ISAPI PTZ 사용
+
+내부 매핑 로직은 아래와 같습니다:
+
+```text
+switch protocol {
+case "onvif", "ptz":
+    return NewOnvifPTZ(config.Host, config.Port, config.Username, config.Password), nil
+case "isapi", "hikvision":
+    return NewHikvisionPTZ(config.Host, config.Port, config.Username, config.Password), nil
+}
+```
 
 ---
 
 ## 지원 카메라
 
-ONVIF 표준 프로토콜을 지원하는 모든 PTZ 카메라와 호환됩니다. (Hikvision, Dahua, Axis, Sony 등)
+ONVIF 표준 및 Hikvision ISAPI를 지원하는 PTZ 카메라와 호환됩니다. (Hikvision, Dahua, Axis, Sony 등)
 
 ### 구현된 기능
 
@@ -560,7 +584,7 @@ ONVIF 표준 프로토콜을 지원하는 모든 PTZ 카메라와 호환됩니�
 
 4. **인증**: 카메라의 RTSP URL에 포함된 username/password가 ONVIF 제어에도 사용됩니다. WS-Security 표준 인증을 사용합니다.
 
-5. **포트 설정**: `ptzPort`를 지정하지 않으면 기본 HTTP 포트(80)가 사용됩니다. ONVIF 서비스 엔드포인트는 `http://[host]:[port]/onvif/device_service`입니다.
+5. **PTZ 소스 URL**: `ptzSource`에 프로토콜, 인증정보, 호스트, 포트를 포함해 주세요. 포트를 생략하면 장치 기본 HTTP 포트(보통 80)가 사용됩니다. ONVIF 서비스 엔드포인트는 `http://[host]:[port]/onvif/device_service`입니다.
 
 6. **Focus/Iris 제어**:
    - **Focus**: Hikvision ISAPI와 ONVIF 모두 지원. ONVIF는 PTZ ContinuousMove의 Zoom 채널을 사용합니다.
