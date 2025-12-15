@@ -2,8 +2,8 @@
 
 ## 문서 정보
 - **작성일**: 2025-12-10
-- **최종 수정**: 2025-12-10
-- **테스트 기간**: 2025-12-09 ~ 2025-12-10
+- **최종 수정**: 2025-12-15
+- **테스트 기간**: 2025-12-09 ~ 2025-12-15
 - **목적**: Hikvision PTZ 카메라에서 ONVIF Imaging Service (Focus/Iris 제어) 불완전 구현 검증 및 트러블슈팅 가이드
 
 ## ⚠️ 핵심 결론
@@ -22,9 +22,10 @@
 ## 목차
 1. [Iris 제어 테스트](#1-iris-제어-테스트)
 2. [Focus 제어 테스트](#2-focus-제어-테스트)
-3. [ONVIF 표준 vs 실제 구현](#3-onvif-표준-vs-실제-구현)
-4. [근본 원인](#4-근본-원인)
-5. [해결 방안](#5-해결-방안)
+3. [추가 테스트 (2025-12-15)](#3-추가-테스트-2025-12-15)
+4. [ONVIF 표준 vs 실제 구현](#4-onvif-표준-vs-실제-구현)
+5. [근본 원인](#5-근본-원인)
+6. [해결 방안](#6-해결-방안)
 
 ---
 
@@ -420,9 +421,303 @@ ONVIF 표준에서는 Zoom과 Focus가 **완전히 별도의 서비스**를 통�
 
 ---
 
-## 3. ONVIF 표준 vs 실제 구현
+## 3. 추가 테스트 (2025-12-15)
 
-### 3.1 ONVIF 표준에 따른 Focus 제어
+### 3.1 테스트 목적
+
+기존 문서에서 테스트되지 않은 ONVIF Imaging API를 모두 확인하여 누락된 가능성을 완전히 배제
+
+### 3.2 ONVIF Imaging 라이브러리 전체 API 목록
+
+`github.com/use-go/onvif/Imaging` 패키지에서 지원하는 API:
+
+| # | API | 설명 | 이전 테스트 여부 |
+|---|-----|------|----------------|
+| 1 | `GetImagingSettings` | 현재 이미지 설정 조회 | ✅ 테스트됨 |
+| 2 | `SetImagingSettings` | 이미지 설정 변경 | ✅ 테스트됨 |
+| 3 | `GetOptions` | 지원 옵션/범위 조회 | ✅ 테스트됨 |
+| 4 | `GetMoveOptions` | Focus 이동 옵션 조회 | ✅ 테스트됨 |
+| 5 | `Move` | Focus 이동 (Continuous만 테스트) | ⚠️ 부분 테스트 |
+| 6 | `Stop` | Focus 이동 정지 | ✅ 테스트됨 |
+| 7 | `GetStatus` | Focus/Iris 현재 상태 조회 | ❌ **미테스트** |
+| 8 | `GetServiceCapabilities` | Imaging 서비스 능력 조회 | ❌ **미테스트** |
+| 9 | `GetPresets` | Focus 프리셋 목록 조회 | ❌ **미테스트** |
+| 10 | `GetCurrentPreset` | 현재 Focus 프리셋 조회 | ❌ **미테스트** |
+| 11 | `SetCurrentPreset` | Focus 프리셋 설정 | ❌ **미테스트** |
+
+---
+
+### 3.3 추가 테스트 결과
+
+#### 테스트 15: GetServiceCapabilities
+**목적**: Imaging 서비스가 실제로 지원하는 기능 확인
+**방법**: `Imaging.GetServiceCapabilities` 호출
+**결과**: ✅ **성공**
+
+```xml
+<timg:Capabilities ImageStabilization="false"></timg:Capabilities>
+```
+
+**핵심 발견**:
+- ImageStabilization: false
+- **Focus/Iris/Presets 관련 능력 정보가 응답에 없음**
+- 카메라가 이 기능들을 ONVIF로 지원하지 않음을 명시적으로 나타냄
+
+---
+
+#### 테스트 16: GetStatus
+**목적**: Focus/Iris 현재 상태 조회
+**방법**: `Imaging.GetStatus` 호출
+**결과**: ✅ **성공**
+
+```xml
+<tt:FocusStatus20>
+    <tt:Position>0.0</tt:Position>
+    <tt:MoveStatus>UNKNOWN</tt:MoveStatus>
+    <tt:Error>no error</tt:Error>
+</tt:FocusStatus20>
+```
+
+**분석**:
+- Focus Position: 0.0 (현재 위치)
+- MoveStatus: UNKNOWN (상태 불명)
+- Error: no error
+- **조회는 성공하지만, MoveStatus가 UNKNOWN으로 Focus 제어가 비활성화되어 있음을 암시**
+
+---
+
+#### 테스트 17-19: Move - Absolute Focus
+**목적**: 절대 위치로 Focus 이동 시도
+**방법**: `Imaging.Move` with Absolute Focus (Position: 0.0, 0.5, 1.0)
+**결과**: ❌ **모두 실패**
+
+```xml
+<env:Detail><env:Text>Not support Absolute</env:Text></env:Detail>
+```
+
+**분석**: Absolute Focus는 명시적으로 미지원
+
+---
+
+#### 테스트 20-23: Move - Relative Focus
+**목적**: 상대 거리만큼 Focus 이동 시도
+**방법**: `Imaging.Move` with Relative Focus (Distance: 0.1, -0.1, 0.5, -0.5)
+**결과**: ❌ **모두 실패**
+
+```xml
+<env:Detail><env:Text>Not support Absolute</env:Text></env:Detail>
+```
+
+**분석**: Relative Focus 요청에도 "Not support Absolute" 에러 발생 (에러 메시지 오류)
+
+---
+
+#### 테스트 24: GetPresets
+**목적**: Focus 프리셋 목록 조회
+**방법**: `Imaging.GetPresets` 호출
+**결과**: ❌ **실패**
+
+```xml
+<env:Reason><env:Text xml:lang="en">Optional Action Not Implemented</env:Text></env:Reason>
+```
+
+**분석**: Focus 프리셋 기능은 카메라에서 아예 구현하지 않음 (명시적 미구현)
+
+---
+
+#### 테스트 25: GetCurrentPreset
+**목적**: 현재 Focus 프리셋 조회
+**방법**: `Imaging.GetCurrentPreset` 호출
+**결과**: ❌ **실패**
+
+```xml
+<env:Reason><env:Text xml:lang="en">Optional Action Not Implemented</env:Text></env:Reason>
+```
+
+**분석**: GetPresets와 동일하게 미구현
+
+---
+
+#### 테스트 26: SetImagingSettings - Focus.AutoFocusMode
+**목적**: AutoFocus 모드 전환 (MANUAL ↔ AUTO)
+**방법**: `Imaging.SetImagingSettings` with Focus.AutoFocusMode
+**결과**: ❌ **실패**
+
+```xml
+<env:Detail><env:Text>Invalid BLC</env:Text></env:Detail>
+```
+
+**분석**: 기존 Iris 설정과 동일한 "Invalid BLC" 에러 발생
+
+---
+
+#### 테스트 27-35: 추가 PTZ Auxiliary Commands
+**목적**: Focus 관련 Auxiliary 명령어 테스트
+**방법**: `PTZ.SendAuxiliaryCommand` with 다양한 명령어
+**결과**: ❌ **모두 실패**
+
+| 명령어 | 결과 |
+|--------|------|
+| `tt:FocusNear` | AuxiliaryDataNotSupported |
+| `tt:FocusFar` | AuxiliaryDataNotSupported |
+| `tt:AutoFocus` | AuxiliaryDataNotSupported |
+| `FocusNear` | AuxiliaryDataNotSupported |
+| `FocusFar` | AuxiliaryDataNotSupported |
+| `Focus+` | AuxiliaryDataNotSupported |
+| `Focus-` | AuxiliaryDataNotSupported |
+| `AutoFocusOn` | AuxiliaryDataNotSupported |
+| `AutoFocusOff` | AuxiliaryDataNotSupported |
+
+**분석**: 모든 Focus 관련 Auxiliary Command가 미지원
+
+---
+
+#### 테스트 36-43: Continuous Focus (정수 Speed 값)
+**목적**: GetMoveOptions에서 확인된 범위(-7 ~ 7) 내 정수 Speed 값으로 재시도
+**방법**: `Imaging.Move` with Continuous Focus (Speed: 1, 3, 5, 7, -1, -3, -5, -7)
+**결과**: ❌ **모두 실패**
+
+```xml
+<env:Detail><env:Text>Not support Absolute</env:Text></env:Detail>
+```
+
+**분석**: 정수 Speed 값으로도 동일한 에러 발생
+
+---
+
+### 3.4 추가 테스트 결과 요약
+
+| 테스트 | API | 결과 | 에러/응답 |
+|--------|-----|------|----------|
+| 15 | GetServiceCapabilities | ✅ 성공 | ImageStabilization=false |
+| 16 | GetStatus | ✅ 성공 | Position=0.0, MoveStatus=UNKNOWN |
+| 17-19 | Move (Absolute) | ❌ 실패 | Not support Absolute |
+| 20-23 | Move (Relative) | ❌ 실패 | Not support Absolute |
+| 24 | GetPresets | ❌ 실패 | Optional Action Not Implemented |
+| 25 | GetCurrentPreset | ❌ 실패 | Optional Action Not Implemented |
+| 26 | SetImagingSettings (AutoFocusMode) | ❌ 실패 | Invalid BLC |
+| 27-35 | Auxiliary Commands (9개) | ❌ 실패 | AuxiliaryDataNotSupported |
+| 36-43 | Move (Continuous 정수) | ❌ 실패 | Not support Absolute |
+
+**새로 성공한 API**: 2개 (GetServiceCapabilities, GetStatus)
+**새로 실패한 API**: 27개 테스트
+
+---
+
+### 3.5 전체 ONVIF Imaging API 테스트 현황
+
+| API | 테스트 여부 | 결과 | 비고 |
+|-----|-----------|------|------|
+| GetServiceCapabilities | ✅ 완료 | **성공** | Focus/Iris 능력 정보 없음 |
+| GetStatus | ✅ 완료 | **성공** | MoveStatus=UNKNOWN |
+| GetImagingSettings | ✅ 완료 | 성공 | 조회 가능 |
+| SetImagingSettings | ✅ 완료 | **실패** | Invalid BLC |
+| GetOptions | ✅ 완료 | 성공 | 조회 가능 |
+| GetMoveOptions | ✅ 완료 | 성공 | 거짓 정보 반환 |
+| Move (Absolute) | ✅ 완료 | **실패** | Not support Absolute |
+| Move (Relative) | ✅ 완료 | **실패** | Not support Absolute |
+| Move (Continuous) | ✅ 완료 | **실패** | Not support Absolute |
+| Stop | ✅ 완료 | 성공 | 정상 작동 |
+| GetPresets | ✅ 완료 | **실패** | Not Implemented |
+| GetCurrentPreset | ✅ 완료 | **실패** | Not Implemented |
+| SetCurrentPreset | ⚠️ 미테스트 | - | GetPresets 실패로 불필요 |
+
+**총 테스트: 43개** (기존 15개 + 추가 28개)
+
+---
+
+### 3.6 핵심 발견 사항
+
+#### 1. GetServiceCapabilities 응답 분석
+```xml
+<timg:Capabilities ImageStabilization="false"></timg:Capabilities>
+```
+- **Focus, Iris, Presets 관련 능력 정보가 전혀 없음**
+- 이는 카메라가 이 기능들을 ONVIF로 지원하지 않음을 의미
+
+#### 2. GetStatus 응답 분석
+```xml
+<tt:MoveStatus>UNKNOWN</tt:MoveStatus>
+```
+- MoveStatus가 UNKNOWN으로 Focus 제어가 비활성화되어 있음을 암시
+- Position은 조회 가능하지만 제어는 불가
+
+#### 3. Focus 프리셋 명시적 미구현
+```xml
+Optional Action Not Implemented
+```
+- GetPresets, GetCurrentPreset이 "Optional Action Not Implemented" 반환
+- 이전 에러들과 달리 명시적으로 미구현을 표시
+
+#### 4. 모든 Move 방식 실패 확인
+- **Absolute**: Not support Absolute
+- **Relative**: Not support Absolute (에러 메시지 오류)
+- **Continuous**: Not support Absolute (에러 메시지 오류)
+- **결론**: Imaging.Move 전체가 미구현
+
+---
+
+### 3.7 기본 이미지 설정 테스트 (밝기, 채도, 명암비, 선명도)
+
+#### 테스트 목적
+Focus/Iris 외에 기본 이미지 설정(밝기, 채도, 명암비, 선명도)도 ONVIF로 제어 가능한지 확인
+
+#### 테스트 44: GetOptions - 기본 설정 범위 확인
+**결과**: ✅ **성공**
+
+```
+📊 지원되는 설정 범위:
+   Brightness (밝기):     0 ~ 100
+   ColorSaturation (채도): 0 ~ 100
+   Contrast (명암비):     0 ~ 100
+   Sharpness (선명도):    0 ~ 100
+```
+
+#### 테스트 45: GetImagingSettings - 현재 설정값 조회
+**결과**: ✅ **성공**
+
+```
+📊 현재 설정값:
+   Brightness (밝기):     0.0
+   ColorSaturation (채도): 0.0
+   Contrast (명암비):     0.0
+   Sharpness (선명도):    0.0
+```
+
+#### 테스트 46-49: SetImagingSettings - 개별 설정 변경
+
+| 테스트 | 설정 | 값 | 결과 | 에러 |
+|--------|------|-----|------|------|
+| 46 | Brightness (밝기) | 60.0 | ❌ 실패 | Invalid BLC |
+| 47 | ColorSaturation (채도) | 60.0 | ❌ 실패 | Invalid BLC |
+| 48 | Contrast (명암비) | 60.0 | ❌ 실패 | Invalid BLC |
+| 49 | Sharpness (선명도) | 60.0 | ❌ 실패 | Invalid BLC |
+
+#### 테스트 50: SetImagingSettings - 여러 설정 동시 변경
+**방법**: Brightness=55, ColorSaturation=55, Contrast=55, Sharpness=55 동시 설정
+**결과**: ❌ **실패** (Invalid BLC)
+
+---
+
+### 3.8 기본 이미지 설정 테스트 결과 요약
+
+| 설정 | 조회 (GetOptions) | 현재값 조회 | 제어 (SetImagingSettings) |
+|------|------------------|------------|--------------------------|
+| **Brightness (밝기)** | ✅ 범위: 0~100 | ✅ 0.0 | ❌ **실패** |
+| **ColorSaturation (채도)** | ✅ 범위: 0~100 | ✅ 0.0 | ❌ **실패** |
+| **Contrast (명암비)** | ✅ 범위: 0~100 | ✅ 0.0 | ❌ **실패** |
+| **Sharpness (선명도)** | ✅ 범위: 0~100 | ✅ 0.0 | ❌ **실패** |
+
+**핵심 발견**:
+- Focus/Iris뿐만 아니라 **모든 이미지 설정**이 ONVIF로 제어 불가
+- `SetImagingSettings` API 자체가 Hikvision 카메라에서 **완전히 미구현**
+- 모든 설정 변경 시도에 동일한 **"Invalid BLC"** 에러 발생
+
+---
+
+## 4. ONVIF 표준 vs 실제 구현
+
+### 4.1 ONVIF 표준에 따른 Focus 제어
 
 **출처**:
 - [ONVIF Imaging Service Specification v22.06](https://www.onvif.org/specs/srv/img/ONVIF-Imaging-Service-Spec.pdf)
@@ -455,7 +750,7 @@ ONVIF 표준:
 
 ---
 
-### 3.2 Hikvision 카메라의 실제 구현
+### 4.2 Hikvision 카메라의 실제 구현
 
 | ONVIF 명령 | 표준 동작 | Hikvision 구현 | 차이점 |
 |-----------|---------|---------------|-------|
@@ -470,9 +765,9 @@ ONVIF 표준:
 
 ---
 
-## 4. 근본 원인
+## 5. 근본 원인
 
-### 4.1 Hikvision의 불완전한 ONVIF 구현
+### 5.1 Hikvision의 불완전한 ONVIF 구현
 
 Hikvision은 ONVIF 표준을 **부분적으로만 구현**했습니다:
 
@@ -489,7 +784,7 @@ Hikvision은 ONVIF 표준을 **부분적으로만 구현**했습니다:
 
 ---
 
-### 4.2 GetOptions의 의미
+### 5.2 GetOptions의 의미
 
 **ONVIF 스펙**:
 > "Read-only parameters which cannot be modified via SetImagingSettings will only show a single option or identical Min and Max values"
@@ -505,7 +800,7 @@ Hikvision은 ONVIF 표준을 **부분적으로만 구현**했습니다:
 
 ---
 
-### 4.3 오해의 소지가 있는 에러 메시지
+### 5.3 오해의 소지가 있는 에러 메시지
 
 | 시도한 동작 | 에러 메시지 | 실제 의미 |
 |-----------|-----------|----------|
@@ -516,7 +811,7 @@ Hikvision은 ONVIF 표준을 **부분적으로만 구현**했습니다:
 
 ---
 
-### 4.4 웹 검색 결과
+### 5.4 웹 검색 결과
 
 **출처**:
 - [Are Hikvision Cameras ONVIF Compliant](https://vikylin.com/are-hikvision-cameras-onvif-compliant/)
@@ -532,9 +827,9 @@ Hikvision은 ONVIF 표준을 **부분적으로만 구현**했습니다:
 
 ---
 
-## 5. 해결 방안
+## 6. 해결 방안
 
-### 5.1 Hikvision ISAPI 사용 (권장)
+### 6.1 Hikvision ISAPI 사용 (권장)
 
 Focus/Iris 제어가 필요한 경우 **Hikvision ISAPI 프로토콜**을 사용해야 합니다.
 
@@ -596,7 +891,7 @@ Content-Type: application/xml
 
 ---
 
-### 5.2 프로토콜 선택 가이드
+### 6.2 프로토콜 선택 가이드
 
 | 기능 | ONVIF | Hikvision ISAPI |
 |------|-------|-----------------|
@@ -614,7 +909,7 @@ Content-Type: application/xml
 
 ---
 
-### 5.3 mediamtx.yml 설정
+### 6.3 mediamtx.yml 설정
 
 ```yaml
 paths:
@@ -627,7 +922,7 @@ paths:
 
 ---
 
-### 5.4 현재 구현 상태
+### 6.4 현재 구현 상태
 
 **파일**: `internal/ptz/onvif.go`
 
@@ -727,7 +1022,17 @@ func (h *HikvisionPTZ) Iris(speed int) error {
 - `test/test_focus_with_correct_speed.go` - 다양한 Speed 값 테스트
 - `test/test_imaging.go` - 기본 Imaging 서비스 테스트
 
-### 7.3 실행 방법
+### 7.3 종합 테스트 파일 (2025-12-15 추가)
+- `test/test_imaging_complete.go` - 누락된 모든 API 테스트
+  - GetServiceCapabilities
+  - GetStatus
+  - Move (Absolute/Relative)
+  - GetPresets / GetCurrentPreset
+  - SetImagingSettings (AutoFocusMode)
+  - 추가 Auxiliary Commands (9개)
+  - Continuous Focus (정수 Speed)
+
+### 7.4 실행 방법
 
 **GetMoveOptions 확인**:
 ```bash
@@ -748,6 +1053,11 @@ go run test/test_iris_all_methods.go
 **Iris 고급 테스트**:
 ```bash
 go run test/test_iris_user_suggestions.go
+```
+
+**종합 테스트 (2025-12-15)**:
+```bash
+go run test/test_imaging_complete.go
 ```
 
 ---
@@ -786,35 +1096,56 @@ go run test/test_iris_user_suggestions.go
 **Focus**:
 1. GetMoveOptions에서 Continuous Focus 지원 표시 (Speed: -7 ~ 7)
 2. GetImagingSettings에서 현재 Focus 설정을 조회 가능
-3. Stop 명령은 성공 (200 OK)
-4. **Move (Continuous) 모든 Speed 값에서 실패**
+3. GetStatus에서 Focus Position 조회 가능 (MoveStatus: UNKNOWN)
+4. Stop 명령은 성공 (200 OK)
+5. **Move (Absolute/Relative/Continuous) 모든 방식에서 실패**
+
+**새로 확인된 사항 (2025-12-15)**:
+1. GetServiceCapabilities에서 Focus/Iris 능력 정보 없음 (명시적 미지원)
+2. GetStatus는 성공하지만 MoveStatus가 UNKNOWN (제어 비활성화)
+3. GetPresets/GetCurrentPreset은 "Optional Action Not Implemented" (명시적 미구현)
+4. 모든 Focus 관련 Auxiliary Command (9개) 미지원
+5. **기본 이미지 설정(밝기, 채도, 명암비, 선명도)도 모두 제어 불가** (Invalid BLC)
 
 ### ❌ 불가능한 기능
 
 **ONVIF를 통한 제어**:
 1. SetImagingSettings를 통한 Iris 제어
-2. Imaging Move를 통한 Focus 제어
-3. Imaging Move를 통한 Iris 제어
-4. PTZ Auxiliary Command를 통한 Iris 제어
-5. **모든 ONVIF 표준 방식의 Focus/Iris 제어**
+2. Imaging Move (Absolute)를 통한 Focus 제어
+3. Imaging Move (Relative)를 통한 Focus 제어
+4. Imaging Move (Continuous)를 통한 Focus 제어
+5. SetImagingSettings를 통한 AutoFocusMode 변경
+6. PTZ Auxiliary Command를 통한 Iris 제어 (IrisOpen/IrisClose/IrisAuto)
+7. PTZ Auxiliary Command를 통한 Focus 제어 (FocusNear/FocusFar 등 9개)
+8. Focus 프리셋 기능 (GetPresets/SetCurrentPreset)
+9. **SetImagingSettings를 통한 기본 이미지 설정 제어**:
+   - Brightness (밝기)
+   - ColorSaturation (채도)
+   - Contrast (명암비)
+   - Sharpness (선명도)
+10. **모든 ONVIF 표준 방식의 Imaging Service 제어**
 
 ### 🔍 근본 원인
 
 1. **Hikvision 펌웨어의 ONVIF Imaging Service 불완전 구현**
-   - 조회 API (GetOptions, GetMoveOptions, GetImagingSettings): ✅ 구현
-   - 제어 API (Move, SetImagingSettings): ❌ 미구현
+   - 조회 API (GetOptions, GetMoveOptions, GetImagingSettings, GetStatus, GetServiceCapabilities): ✅ 구현
+   - 제어 API (Move, SetImagingSettings, SetCurrentPreset): ❌ 미구현
 
-2. **GetOptions/GetMoveOptions의 의미**
+2. **GetServiceCapabilities 응답 분석**
+   - Focus/Iris/Presets 관련 능력 정보가 전혀 없음
+   - 카메라가 이 기능들을 ONVIF로 지원하지 않음을 명시적으로 표시
+
+3. **GetOptions/GetMoveOptions의 의미**
    - **물리적 하드웨어 사양**만 보고
    - ONVIF를 통한 **소프트웨어 제어 가능 여부**는 반영 안 됨
 
-3. **고급 기능은 ISAPI 전용으로 구현**
+4. **고급 기능은 ISAPI 전용으로 구현**
    - ONVIF: 기본적인 PTZ (Pan/Tilt/Zoom)만 지원
    - ISAPI: Focus, Iris 포함 모든 고급 기능 지원
 
-4. **오해의 소지가 있는 에러 메시지**
-   - "Invalid BLC": 실제로는 Iris 제어 미구현
-   - "Not support Absolute": 실제로는 Imaging Move 전체 미구현
+5. **오해의 소지가 있는 에러 메시지**
+   - "Invalid BLC": 실제로는 Iris/Focus 설정 제어 미구현
+   - "Not support Absolute": 실제로는 Imaging Move 전체 미구현 (Continuous/Relative 요청에도 동일 에러)
 
 ### 💡 해결 방안
 
@@ -856,6 +1187,8 @@ paths:
 ---
 
 **문서 작성**: 2025-12-10
-**최종 수정**: 2025-12-10
+**최종 수정**: 2025-12-15
 **테스트 수행**: Claude Code Assistant
-**검증 완료**: Iris 15가지 + Focus 7가지 방법 전수 테스트
+**검증 완료**: 총 43가지 방법 전수 테스트
+- 1차 테스트 (2025-12-10): Iris 15가지 + Focus 7가지
+- 2차 테스트 (2025-12-15): 추가 21가지 (미테스트 API 전수 확인)
